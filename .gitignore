@@ -8,4 +8,4 @@ datasets/flag_drawings
 datasets/minesweeperOnline
 datasets/mine_drawings
 datasets/minesweeper_online/*png
-img/
+/img
