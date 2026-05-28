@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Minesweeper Mirror",
+  "version": "0.1.0",
+  "description": "Enhanced aesthetics, sound effects, and session recording for minesweeper.online",
+  "permissions": ["storage"],
+  "host_permissions": ["https://minesweeper.online/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://minesweeper.online/*"],
+      "js": ["dist/content.js"],
+      "css": ["src/styles/board.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "dist/background.js"
+  }
+}

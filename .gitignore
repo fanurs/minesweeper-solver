@@ -1,11 +1,19 @@
-.vscode
+# Python
 env/
 __pycache__/
+.venv/
+dist/
+*.egg-info/
 
-# temporary
-datasets/cell_images
-datasets/flag_drawings
-datasets/minesweeperOnline
-datasets/mine_drawings
-datasets/minesweeper_online/*png
-/img
+# Node
+node_modules/
+extension/dist/
+
+# uv
+server/.venv/
+
+# Session recordings (generated output, not source)
+sessions/
+
+# Temp / scratch
+assets/frames/
