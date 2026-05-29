@@ -17,11 +17,14 @@ each game unfolded.
 
 - **Custom aesthetics** — inject CSS to restyle the board (colors, fonts,
   animations) over the site's own styles.
-- **Sound effects** — play audio on reveal, flag, win, and loss.
+- **Sound effects** — synthesized audio on reveal, chord, flag, and loss, with an
+  efficiency **combo** that rises in pitch as you keep making clean moves, plus a
+  win flourish.
 - **Session recording** — capture the full game as a compact binary `.msm`
   file: board state changes, cursor trajectory, mouse events, and end-of-game
-  stats (Time, 3BV, 3BV/s, IOE, clicks, …). Files are downloaded locally on
-  game end — no server, no account, nothing leaves your machine.
+  stats (Time, 3BV, 3BV/s, IOE, clicks, …). Completed games are saved in the
+  extension and exported to disk on demand — no server, no account, nothing
+  leaves your machine.
 
 ## Tech stack
 
@@ -39,8 +42,7 @@ extension/        Chrome extension (TypeScript → dist/)
   src/            content script, service worker, styles, shared types
   tests/          Vitest tests against fixture HTML
 fixtures/         DOM snapshots from minesweeper.online for parser tests
-docs/             .msm session-file format + recording lifecycle specs
-PLAN.md           long-term roadmap
+docs/             .msm format, recording lifecycle, and sound-effects specs
 ```
 
 ## Building (dev)
@@ -53,7 +55,7 @@ npm run build      # outputs to extension/dist/
 
 Then load it in Chrome via `chrome://extensions` → enable **Developer mode** →
 **Load unpacked** → select the `extension/` directory. (A polished install
-flow is planned; see [PLAN.md](PLAN.md).)
+flow is planned.)
 
 ## License
 

@@ -293,6 +293,13 @@ generic "Leave site?" confirmation as a reminder. It can only *warn* (its text i
 not customizable and it cannot save) — the data is already safe in IndexedDB
 regardless. Any in-progress (unfinished) game is discarded on close.
 
+**Compression.** Sessions are stored **uncompressed** in IndexedDB — the binary
+is already compact, and raw storage means no decompress on every read. Export
+*optionally* gzips each file to `.msm.gz` for smaller disk archives; this is a
+pure export-boundary convenience, not part of the format. DEFLATE decompresses at
+hundreds of MB/s, so even thousands of games gunzip in ~a second at analysis time
+— never a bottleneck. The `.msm` byte layout itself is never compressed internally.
+
 **Service-worker role.** Issuing the download is the **only** thing the service
 worker does. All recording state, timers, and the buffer live in the content
 script (the MV3 service worker is ephemeral — terminated after ~30 s idle); the

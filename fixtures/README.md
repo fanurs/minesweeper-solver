@@ -44,6 +44,10 @@ For good test coverage, please provide at minimum:
 - [x] One over-flagged board (counter goes negative) — exposes `hd_top-area-num-` minus-sign class
 - [x] One loss with an incorrectly-flagged cell (yields a `hd_opened hd_type11` cell)
 - [x] One synthetic mid-game with a pressed cell (`hd_closed hd_pressed`)
+- [x] A cell with a decorative gamification overlay class — `expert_loss_01.html`
+      has `cell-ticket-flower` appended to a revealed cell (e.g. `cell size26
+      hd_opened hd_type1 cell-ticket-flower`). The parser must ignore such extra
+      classes and read state from the known tokens only (never `0xFF`).
 
 High-number cells (6, 7, 8) are rare — include them if you happen to have a board with them.
 

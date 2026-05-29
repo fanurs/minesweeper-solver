@@ -72,16 +72,22 @@ the event is included so click location is unambiguous without interpolation.
 
 **Derived actions — computed at analysis time, not stored**
 
-| Raw event pattern                           | Derived interpretation      |
-|---------------------------------------------|-----------------------------|
-| `LEFT_DOWN` + `LEFT_UP`, same cell          | Simple left click           |
-| `RIGHT_DOWN` + `RIGHT_UP`, same cell        | Flag / unflag               |
-| `LEFT_DOWN` + `RIGHT_DOWN` (or vice versa)  | Chord attempt begin         |
-| Both released while cursor on number cell   | Chord (1.5-click)           |
-| `MIDDLE_DOWN` + `MIDDLE_UP`                 | Chord (alternative method)  |
+| Raw event pattern                                 | Derived interpretation         |
+|---------------------------------------------------|--------------------------------|
+| `LEFT_DOWN` + `LEFT_UP` on a **closed** cell      | Simple left click (reveal)     |
+| `LEFT_DOWN` + `LEFT_UP` on an **opened number** cell | Chord (left-click-chord mode) |
+| `RIGHT_DOWN` + `RIGHT_UP`, same cell              | Flag / unflag                  |
+| `LEFT_DOWN` + `RIGHT_DOWN` (or vice versa)        | Chord attempt begin            |
+| Both released while cursor on a number cell       | Chord (1.5-click)              |
+| `MIDDLE_DOWN` + `MIDDLE_UP`                       | Chord (alternative method)     |
 
-Chording detection is left to analysis so the raw event sequence is preserved
-without interpretation loss. Repeated flag/unflag on the same cell produces
+Chording is **method-agnostic**: minesweeper.online supports left-click chord
+(a single left click on an already-opened number cell), the 1.5-click (L+R), and
+middle-click. Classify a chord by its **effect** — a click landing on an
+already-opened number cell (states `0x01`–`0x08`) that opens ≥ 1 neighbor — not by
+the input method. (Pilot data: this player chords with left-click only.) Chording
+detection is left to analysis so the raw event sequence is preserved without
+interpretation loss. Repeated flag/unflag on the same cell produces
 alternating `BOARD_CHANGE` records (`0x0A` → `0x09` → `0x0A` …) and is
 captured exactly as-is — this is valid player behaviour and not an error.
 
@@ -179,9 +185,15 @@ timestamp `t`.
   `MOUSE_EVENT` + `CURSOR` records and cell geometry. The parser must
   recognise `hd_pressed` so it can ignore it when computing the cell's
   persistent state (treat `hd_closed hd_pressed` as `0x09`).
-- Cell elements carry additional skin classes (e.g. `size26`). The parser
-  must use `classList.contains()` / regex matching on the full class list,
-  not equality against a fixed string.
+- Cell elements carry additional **skin / decorative classes** that do not
+  affect cell state — e.g. `size26` (skin), and gamification overlays like
+  `cell-ticket-flower` (a collectible "ticket" the site places on a cell; see
+  `fixtures/expert_loss_01.html`). The parser must determine state by matching the
+  **known** tokens (`hd_opened`/`hd_closed`/`hd_flag` + the `hd_type{n}` regex)
+  via `classList.contains()` / regex on the full class list, **not** by equality
+  against a fixed string, and must **ignore** any unrecognized extra class. Such
+  decorative classes must **never** make a cell read as `0xFF` or trigger the
+  hard-abort (the state is still fully determined by the known tokens).
 - `0xFF` must never be written by the recorder. If a genuinely unknown DOM class
   combination is encountered, emit `SESSION_EVENT RECORDING_ERROR` and abort.
   The end-of-game classes `hd_type10` (`0x0B`) and `hd_type11` (`0x0D`) are

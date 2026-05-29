@@ -1,221 +1,220 @@
 # Minesweeper Mirror — Sound Effects (v1)
 
-Optional, client-side **sound effects** played live by the content script while
-a game is recorded. Sounds are a presentation layer on top of the recorder
-model defined in [format-events.md](format-events.md) and
-[recording-lifecycle.md](recording-lifecycle.md): every sound is derived from
-the same `MOUSE_EVENT` (`0x20`), `BOARD_CHANGE` (`0x30`), and `SESSION_EVENT`
-(`0x40`) signals the recorder already produces. Sound playback **never** alters,
-gates, or is written to the `.msm` stream — it is a pure consumer of recorder
-state. Audio failures (suspended context, decode error) are logged and
-swallowed; they never emit `RECORDING_ERROR`.
+Optional, client-side **sound effects** played live by the content script while a
+game is recorded. Sounds are a presentation layer on top of the recorder model
+([format-events.md](format-events.md), [recording-lifecycle.md](recording-lifecycle.md)):
+every sound is derived from the same `MOUSE_EVENT` (`0x20`), `BOARD_CHANGE`
+(`0x30`), and `SESSION_EVENT` (`0x40`) signals the recorder already produces.
+Sound playback **never** alters, gates, or is written to the `.msm` stream — it
+is a pure consumer of recorder state, and audio failures are logged and swallowed
+(never `RECORDING_ERROR`).
 
-All terminology (`LEFT_DOWN`, `BOARD_CHANGE`, state codes `0x00`–`0x0A`,
-`GAME_LOSS`, `hd_pressed`) is used exactly as in those documents.
+This is built for **competitive players**, which drives every decision below.
 
 ---
 
-## Scope
+## Design principles
 
-Sound effects fire only while the recorder is in the `RECORDING` state. No sound
-is produced in `IDLE`, `TAB_BLURRED`, or `FINISHING`, with the single exception
-that the loss sting is allowed to play during the `RECORDING → FINISHING`
-transition that `GAME_LOSS` triggers.
+1. **Sound the *outcome*, not the input.** One sound per *meaningful result*
+   (reveal / chord / flag / unflag), fired when the board change is detected —
+   not on raw mouse-down. Pressing isn't an achievement; revealing is. There is
+   **no standalone "press" sound** (it would double the audio events during fast
+   play and reward pressing over accomplishing).
+2. **Every in-game sound is short** (~30–60 ms). Top players chord in rapid
+   bursts, so reveal *and* chord must be tight, not just flags.
+3. **Latency beats length.** Fire immediately; sounds run from the 30 Hz poll, so
+   worst-case lag is ~33 ms — below the ~50 ms "feels instant" bar. (If that ever
+   feels soft, fire the base tick on the synchronous `mouseup` and only the combo
+   pitch from the poll.)
+4. **The combo is an efficiency meter.** Minesweeper's core skill is efficiency
+   (IOE = 3BV / clicks). A clean, no-waste run makes the audio *rise in pitch*;
+   wasted actions drop it back. This rewards exactly what competitive play optimizes.
+5. **Never punish with sound.** A wasted move silently resets the combo — there is
+   **no harsh "fail" buzz** (a constantly-used tool must not nag). Losing the rising
+   pitch is the feedback.
+6. **Never block, never bottleneck.** Fire-and-forget one-shots into a fixed voice
+   pool; if saturated, drop silently (a missed blip is imperceptible; audio lag is not).
+
+### Click-rate budget
+
+Design target: **sustained ≤ 10 CPS, instantaneous ≤ 15 CPS**. 5 CPS is already
+elite; >10 CPS happens only as rare bursts (e.g. fast beginner boards). Above the
+target the only requirement is that audio **must not interfere with gameplay or
+crash** — it degrades by dropping voices, never by stalling. (Pilot data from real
+play: peak **6 CPS** over any 1 s, tightest inter-click gap **30 ms** — so the
+voice pool below is mostly headroom, not a hot path.)
 
 ---
 
-## v1 Event → Sound Mapping
+## Move taxonomy → sound
 
-Five events produce sound in v1. Each is detected from the recorder model, not
-from ad-hoc DOM listeners, so the audio layer stays consistent with what the
-`.msm` file records.
+Detected from the per-poll `BOARD_CHANGE` batch plus the `MOUSE_EVENT` stream.
+"Productive" = the action opened ≥ 1 new cell.
 
-| Event             | Trigger condition                                                                                                                                  | Sound      |
-|-------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|------------|
-| **Left press**    | `MOUSE_EVENT` `LEFT_DOWN` (`0x01`) over a **closed, unflagged** cell (state `0x09`) — i.e. the cell that would receive the transient `hd_pressed` feedback class. | `press`    |
-| **Cell reveal**   | A poll yielding reveals to opened states (`0x00`–`0x08`) where the press was over a **closed** cell — and it is not a chord (below).                | `reveal`   |
-| **Chording**      | A left press/release over an **already-opened number cell** (`0x01`–`0x08`) that yields **two or more** `BOARD_CHANGE` reveals sharing one timestamp `t`. | `chord`    |
-| **Hit a mine**    | `SESSION_EVENT` `GAME_LOSS` (`0x03`).                                                                                                               | `mine`     |
-| **Flag / unflag** | `BOARD_CHANGE` to flagged (`0x0A`) → `flag`; `BOARD_CHANGE` from `0x0A` back to closed (`0x09`) → `unflag`.                                          | `flag` / `unflag` |
+| Move | Board effect | Productive? | Sound | Combo |
+|---|---|---|---|---|
+| **Reveal — number** | opens 1 numbered cell | ✓ | `reveal` (short, combo-pitched) | +1 |
+| **Reveal — cascade** (clicked a 0) | opens many cells at once | ✓ | `cascade` (richer reveal variant) | +1 |
+| **Chord — success** | opens adjacent cells | ✓ | `chord` (short, distinct timbre, combo-pitched) | +1 |
+| **Chord — no-op** (flags ≠ number) | nothing | ✗ wasted | *silent* | **reset** |
+| **Flag** | cell → flagged | neutral | `flag` (fixed pitch) | neutral |
+| **Unflag** | flag → closed | neutral | `unflag` (fixed pitch) | neutral¹ |
+| **No-op click** (on opened/flagged cell, no chord) | nothing | ✗ wasted | *silent* | **reset** |
+| **Hit mine** (bad reveal or chord) | loss | terminal | `mine` (short low thud) | — |
+| **Win** (last safe cell) | win | terminal | `win` (combo-scaled arpeggio) | — |
+
+¹ Flagging is **combo-neutral** — elite "no-flag" players never flag, and flag
+placement is legitimate setup we can't grade live. *Exception:* a flag immediately
+removed (flag↔unflag on the same cell within `flagThrashWindowMs`) is treated as a
+**wasted** action and **resets** the combo.
 
 ### Detection notes
 
-The detector runs against the same per-poll batch of `BOARD_CHANGE` records the
-recorder emits, plus the `MOUSE_EVENT` stream.
-
-- **Left press (`press`).** Bound to `LEFT_DOWN`, not the reveal, so the click
-  feels responsive before the DOM poll resolves. It is the audible analog of the
-  `hd_pressed` input-feedback class (which is itself never a `BOARD_CHANGE`).
-  Flagged (`0x0A`) and already-opened cells cannot be pressed → no `press` sound.
-
-- **Reveal vs. chord disambiguation.** Both reveal opened states (`0x00`–`0x08`);
-  the difference is the cell under the cursor at press time and cardinality.
-  Classify **once per timestamp `t`** (not once per `BOARD_CHANGE`), so a cascade
-  is a single decision:
-  - **Chord** = the press was over a cell already in an opened *number* state
-    (`0x01`–`0x08`) **and** the batch at `t` contains **≥ 2** reveals. This is the
-    "revealed, *correct* number cell" rule: **correctness is inferred from the
-    effect** (the chord actually revealed cells), because flag-vs-mine
-    correctness is not knowable synchronously at press time. A chord on a number
-    cell whose flags are wrong/insufficient reveals nothing → plays nothing.
-  - **Reveal** = the press was over a *closed* cell (`0x09`). A cascade from one
-    closed `0x00` cell may open many cells in one poll but is still **one**
-    `reveal` (cardinality alone does not make it a chord).
-
-- **Mine (`mine`).** Driven solely by `GAME_LOSS`, not by the `0x0B`/`0x0D`
-  board states (which appear *as a consequence* of loss and would multi-trigger).
-  The site does not visually distinguish the triggering mine, so v1 plays one
-  loss sting.
-
-- **Flag / unflag.** Detected purely from `BOARD_CHANGE` transitions involving
-  `0x0A`, independent of which input caused them. Rapid alternating flag/unflag
-  alternates the sounds — valid behaviour, subject to debouncing.
-
-- **Loss-time board noise must be suppressed.** On loss the recorder performs one
-  final poll that captures the mine reveal (`0x0B`/`0x0D`) and then stops (see
-  [recording-lifecycle.md](recording-lifecycle.md)). The audio layer must
-  **suppress** `reveal`/`chord` sounds for that terminal batch and play only the
-  `mine` sting — once the lose-face / `GAME_LOSS` is observed, discard remaining
-  reveals so the mine cascade does not fire a flurry of `reveal` blips.
+- **Reveal vs. chord vs. cascade.** Classify **once per timestamp `t`** (a cascade
+  is one decision, not N):
+  - **Chord** = the click was over an already-opened *number* cell (`0x01`–`0x08`)
+    and the batch opened ≥ 1 cell. Correctness is inferred from the *effect* (it
+    revealed something) — flag/mine correctness isn't knowable synchronously, and
+    chording is method-agnostic (the player may use L+R, the 1.5-click, or
+    middle-click; pilot data shows middle-click chording is common). A chord that
+    opens nothing is the wasted "no-op".
+  - **Reveal** = the click was over a *closed* cell (`0x09`). If the batch opened
+    ≥ `cascadeMinCells`, use the richer `cascade` voice; otherwise `reveal`.
+- **Flag / unflag.** From `BOARD_CHANGE` transitions to/from flagged (`0x0A`),
+  independent of input method.
+- **Mine.** Driven solely by `GAME_LOSS` (`0x03`), not the `0x0B`/`0x0D` reveal
+  states. On loss the recorder does one final poll that captures the mine reveal
+  then stops; the audio layer must **suppress** `reveal`/`chord`/`cascade` for that
+  terminal batch and play only the `mine` thud. The site doesn't mark the
+  triggering mine, so it's one sound. A loss is not celebrated — `mine` is a short,
+  deflating low thud (mutable; players don't replay losses).
+- **Win.** On `GAME_WIN`, play `win`: an ascending arpeggio up the combo `scale`,
+  its height/length reflecting the combo reached — the efficiency payoff.
 
 ---
 
-## Audio Approach
+## Combo system (the efficiency meter)
 
-### Option A — Bundled CC0 assets
+A single `comboStep` spans all productive moves (reveal + chord + cascade); flags
+are neutral.
 
-Ship pre-recorded one-shots in the package (`assets/sound/*.{ogg,webm}`), decoded
-once into `AudioBuffer`s. Concrete **CC0 / public-domain** sources (no
-attribution, safe to redistribute):
+- **Productive move** → `comboStep = min(comboStep + 1, maxSteps)`.
+- **Wasted move** (no-op click, failed chord, flag↔unflag thrash) → `comboStep = 0`.
+- **Idle** ≥ `idleResetMs` with no productive move → `comboStep = 0`. (Thinking is
+  *not* waste in Minesweeper, so this is generous — pilot data shows the longest
+  real pause was 0.8 s, so 3 s rarely triggers; it's a staleness guard.)
+- **Pitch:** the `reveal`/`chord`/`cascade` voice is transposed up by
+  `scale[comboStep]` semitones (a repeating pentatonic table → it always sounds
+  musical ascending), capped at `maxSteps`, then holds. At `comboStep = 0` it plays
+  at base pitch. No sound on reset — the dropped pitch *is* the signal.
 
-- [Kenney — Interface Sounds](https://kenney.nl/assets/interface-sounds) and
-  [Kenney — UI Audio](https://kenney.nl/assets/ui-audio) (CC0) — clean click/tick
-  one-shots for `press`, `flag`, `unflag`.
-- [OpenGameArt — CC0 Sound Effects](https://opengameart.org/content/cc0-sound-effects)
-  — impacts for `chord` / `mine`.
-- [Freesound](https://www.freesound.org/) (filter to CC0 only) for explosion/
-  reveal textures.
-
-Pros: rich, recognizable timbres. Cons: binary weight, curation/normalization,
-per-asset licence bookkeeping.
-
-### Option B — Runtime synthesis (Web Audio API)
-
-Generate every sound from `OscillatorNode`s and short noise `AudioBuffer`s shaped
-by gain envelopes — no asset files:
-
-- **`press`** — 6–10 ms triangle blip ~1000 Hz, fast decay.
-- **`reveal`** — sine/triangle ping ~660 Hz, ~40 ms.
-- **`chord`** — two-note ping (~660 Hz → ~880 Hz) so it's distinct from a reveal.
-- **`flag` / `unflag`** — higher tick (~1200 Hz) vs lower tick (~800 Hz) so the
-  toggle direction is audible.
-- **`mine`** — white-noise burst through a down-swept low-pass, ~250–400 ms decay.
-
-Always ramp gain with `linearRampToValueAtTime`/`setTargetAtTime` rather than
-starting/stopping at non-zero gain, to avoid click artifacts.
-
-Pros: **zero asset friction**, tiny bundle, lowest latency. Cons: utilitarian
-timbres; envelopes need tuning.
-
-### Recommendation — synthesis-first, asset-optional
-
-Default v1 to **Option B**. Architect the player around a small **sound registry**
-keyed by logical name (`press`, `reveal`, `chord`, `flag`, `unflag`, `mine`) so a
-future minor version can swap a synth voice for a decoded CC0 `AudioBuffer`
-per-event without touching the detector.
+Net effect: a flawless efficient clear sings steadily upward; a fumble quietly
+drops you to the bottom of the ladder. The audio literally tracks your IOE.
 
 ---
 
-## Web Audio Implementation
+## Voice management
 
-### AudioContext lifecycle & autoplay gesture
-
-- Create **one** `AudioContext` for the content script. A `master` `GainNode`
-  feeds `ctx.destination`; per-event `GainNode`s feed `master`.
-- Browsers create the context `suspended` until a user gesture. Resume it from
-  within a gesture handler: the first in-page `LEFT_DOWN`/`RIGHT_DOWN` (already
-  captured for `MOUSE_EVENT`) doubles as the unlock gesture — on first mouse-down,
-  if `ctx.state !== 'running'`, call `ctx.resume()`. The very first `press` may be
-  silent while the context resumes; acceptable for v1.
-- Construct with `{ latencyHint: 'interactive' }`. The context outlives
-  individual games and is never `close()`d while the content script is alive.
-
-### Preloading / low latency
-
-- **Synthesis path:** nothing to decode; pre-allocate the shared `mine` noise
-  buffer once at context creation. Oscillator/gain nodes are cheap, created
-  per-shot.
-- **Asset path (future):** `fetch` each file via `chrome.runtime.getURL(...)`,
-  `decodeAudioData()` once at startup, retain the `AudioBuffer`s.
-
-### Overlapping / rapid sounds
-
-- `AudioBufferSourceNode`/`OscillatorNode` are one-shot — create a **fresh
-  source per shot, reuse the buffer**; nodes are GC'd when finished.
-- Cascade reveals are **one** logical sound (classified once per timestamp), the
-  primary defense against spam.
-- **Polyphony cap:** `MAX_VOICES` (default **8**); drop the newest shot beyond it.
-
-### Debouncing
-
-- Per-event min-interval: reject a shot if the same logical sound played less than
-  `debounceMs` ago (defaults: `press`/`reveal` 20 ms, `flag`/`unflag` 40 ms,
-  `chord` 60 ms, `mine` 0 ms — never debounce loss).
-- `press` and `reveal` are distinct names, so a single click's press-then-reveal
-  both play.
-
-### Volume / mixing
-
-- Each logical sound routes through its own `GainNode` into `master`. Per-event
-  **enable** skips playback entirely (not zero-gain). `master` gain is the global
-  volume; mute short-ramps to 0.
+- One `AudioContext`; a `master` `GainNode` → `ctx.destination`; per-event
+  `GainNode`s → `master`. Each shot is a fresh `OscillatorNode`/`AudioBufferSourceNode`
+  (one-shot; reuse the buffer, GC the node).
+- **Pool of `maxVoices` (default 12).** New sound takes a free voice; if none are
+  free, **steal the oldest** with a `declickFadeMs` (~4 ms) release ramp so it fades
+  instead of popping. **Never hard-stop on a new move** (that pops and feels
+  chopped). Terminal sounds (`mine`, `win`) never contend (the game is over).
+- Past the cap, **drop the new shot silently** — never queue or block.
+- No per-event debounce-drop: we *want* every productive move to sound (it feeds
+  the combo). Overlap is handled by short sounds + the pool, not by suppression.
 
 ---
 
-## Settings / Config Sketch
+## Tunable parameters (single source of truth)
 
-Persisted via `chrome.storage.sync` so settings follow the user across devices.
+All knobs live in **one** object so they can become user-configurable later
+without hunting through code. Defaults below; persisted via `chrome.storage.sync`.
 
 ```jsonc
 {
   "sound": {
-    "enabled": true,            // global on/off
-    "masterVolume": 0.7,        // 0.0–1.0 → master GainNode.gain
-    "events": {
-      "press":  { "enabled": true, "volume": 0.4 },
-      "reveal": { "enabled": true, "volume": 0.8 },
-      "chord":  { "enabled": true, "volume": 0.9 },
-      "flag":   { "enabled": true, "volume": 0.7 },
-      "unflag": { "enabled": true, "volume": 0.7 },
-      "mine":   { "enabled": true, "volume": 1.0 }
+    "enabled": true,
+    "masterVolume": 0.7,           // 0.0–1.0 → master GainNode.gain
+
+    "maxVoices": 12,               // concurrent one-shots; excess dropped silently
+    "declickFadeMs": 4,            // release ramp when stealing a voice
+
+    "combo": {
+      "idleResetMs": 3000,         // no productive move this long → reset
+      "maxSteps": 8,               // pitch ladder caps here, then holds
+      "scale": [0, 2, 4, 7, 9],    // semitone offsets, repeats +12 per octave (major pentatonic)
+      "flagThrashWindowMs": 800,   // flag then unflag same cell within this = wasted
+      "cascadeMinCells": 4         // ≥ this many opened in one poll → "cascade" voice
     },
-    "engine": "synth"           // "synth" (default) | "assets" (future)
+
+    "events": {
+      "reveal":  { "enabled": true, "volume": 0.70, "baseHz": 523, "durMs": 45 },  // combo-pitched
+      "chord":   { "enabled": true, "volume": 0.80, "baseHz": 523, "durMs": 45 },  // combo-pitched, distinct timbre
+      "cascade": { "enabled": true, "volume": 0.80,                "durMs": 90 },  // richer reveal, combo-pitched
+      "flag":    { "enabled": true, "volume": 0.60, "hz": 880,     "durMs": 35 },  // fixed, combo-neutral
+      "unflag":  { "enabled": true, "volume": 0.60, "hz": 587,     "durMs": 35 },
+      "mine":    { "enabled": true, "volume": 0.80,                "durMs": 220 }, // low deflating thud
+      "win":     { "enabled": true, "volume": 0.90 }                              // combo-scaled arpeggio
+    },
+
+    "engine": "synth"              // "synth" (default) | "assets" (future)
   }
 }
 ```
 
-Effective gain = `events[name].volume` × `masterVolume`. `engine: "assets"` is
-reserved for a future minor version and falls back to `"synth"` if decode fails.
+Effective gain for a shot = `events[name].volume` × `masterVolume`; `enabled:false`
+at either level skips the shot entirely. Tune the *feel* by editing this block only.
 
 ---
 
-## Explicit Non-Goals (v1)
+## Web Audio implementation
 
+- **Autoplay gesture:** the context starts `suspended`; resume it from the first
+  in-page mouse-down (already captured for `MOUSE_EVENT`) — `if (ctx.state !==
+  'running') ctx.resume()`. The very first sound may be silent while it resumes;
+  acceptable. Construct with `{ latencyHint: 'interactive' }`.
+- **Synthesis path (default):** nothing to decode; pre-allocate the shared `mine`
+  noise buffer once. Combo pitch is just `baseHz * 2 ** (semitones / 12)`.
+- **Asset path (future):** `fetch` via `chrome.runtime.getURL`, `decodeAudioData`
+  once at startup, retain `AudioBuffer`s in the registry; `engine: "assets"` selects
+  it and falls back to `"synth"` on decode failure.
+- Always ramp gain with `linearRampToValueAtTime`/`setTargetAtTime` (never start/stop
+  at non-zero gain) to avoid click artifacts.
+
+---
+
+## Audio approach: synthesis-first, asset-optional
+
+Default to **runtime synthesis** (zero asset friction, tiny bundle, lowest latency,
+and it composes with the combo pitch ladder). Keep the player behind a **sound
+registry** keyed by logical name so a future minor version can swap a synth voice
+for a decoded CC0 `AudioBuffer` per event without touching the detector. Candidate
+CC0 sources if recorded assets are ever wanted (no attribution, redistributable):
+[Kenney Interface/UI Audio](https://kenney.nl/assets/interface-sounds),
+[OpenGameArt CC0](https://opengameart.org/content/cc0-sound-effects),
+[Freesound (CC0 filter)](https://www.freesound.org/).
+
+---
+
+## Explicit non-goals (v1)
+
+- No standalone press/click sound (outcome-driven only).
 - No background music / ambient loops — one-shots only.
-- No per-cell pitch (number value → pitch, position → pan).
-- No win fanfare — `GAME_WIN` is silent (game-end is loss-only for audio).
+- No per-cell pitch by *value* or *position* (combo pitch is by *efficiency*, not
+  which number/where).
 - No cursor / scroll / zoom / resize / blur / focus sounds.
 - No distinct "triggering mine" cue (state `0x0C` is never emitted).
 - No spatialization, reverb, or DSP beyond per-shot gain envelopes.
-- No playback while replaying saved `.msm` files (a `.msm` player is out of scope).
+- No playback while replaying saved `.msm` files (a player is out of scope).
 - Sound never gates or mutates recording.
 
 ---
 
 ## Sources
 
-- [MDN — Web Audio API best practices](https://developer.mozilla.org/en-US/docs/Web/API/Web_Audio_API/Best_practices)
-- [MDN — AudioBufferSourceNode](https://developer.mozilla.org/en-US/docs/Web/API/AudioBufferSourceNode)
+- [MDN — Web Audio API best practices](https://developer.mozilla.org/en-US/docs/Web/API/Web_Audio_API/Best_practices) · [AudioBufferSourceNode](https://developer.mozilla.org/en-US/docs/Web/API/AudioBufferSourceNode)
 - [Chrome — Web Audio, Autoplay Policy and Games](https://developer.chrome.com/blog/web-audio-autoplay)
 - [alemangui — the ugly click and the human ear](http://alemangui.github.io/ramp-to-value)
-- [Kenney — Interface Sounds (CC0)](https://kenney.nl/assets/interface-sounds) · [OpenGameArt — CC0](https://opengameart.org/content/cc0-sound-effects) · [Freesound](https://www.freesound.org/)

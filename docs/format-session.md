@@ -242,7 +242,9 @@ session store (see
 **not** auto-downloaded. The user exports stored sessions on demand (an explicit
 Export action), at which point each is written as a download under a
 `minesweeper-mirror/` subfolder of the default Downloads directory using this
-name.
+name. Exports may optionally be gzipped (`.msm.gz`); IndexedDB stores the raw
+`.msm`, and the byte layout itself is never compressed internally (see
+[recording-lifecycle.md](recording-lifecycle.md#persistence--export)).
 
 In-progress sessions live only in memory and are discarded if the tab closes
 mid-game; completed sessions already in IndexedDB survive tab/window close.
