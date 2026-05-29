@@ -1,28 +1,14 @@
-# Python
-env/
-__pycache__/
-.venv/
-dist/
-*.egg-info/
-
 # Node
 node_modules/
 extension/dist/
 
-# uv
-server/.venv/
-
-# Session recordings (generated output, not source)
-sessions/
-
 # Temp / scratch
-assets/frames/
 scratch/
 
 # Editor atomic-write leftovers (e.g. foo.ts.tmp.1234.abcd)
 *.tmp.*
 
 # Personal notes (not for the repo)
+PLAN.md
 TODO.md
 CLAUDE.md
-PLAN.md
