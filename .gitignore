@@ -17,3 +17,7 @@ sessions/
 
 # Temp / scratch
 assets/frames/
+
+# Personal notes (not for the repo)
+TODO.md
+CLAUDE.md

@@ -16,12 +16,12 @@ treated as a parse error; see Error Handling below.
 ```
 [FILE_HEADER]          ← fixed 688 bytes
 [RECORD] [RECORD] ...  ← sequential, tagged records
-[FILE_FOOTER]          ← fixed 59 bytes, written only on clean game end
+[FILE_FOOTER]          ← fixed 65 bytes, written only on clean game end
 ```
 
 ---
 
-## File Header (fixed, 684 bytes)
+## File Header (fixed, 688 bytes)
 
 | Offset | Size | Type   | Field         | Description                                              |
 |--------|------|--------|---------------|----------------------------------------------------------|
@@ -146,64 +146,75 @@ game-relative) and does not overflow in practice.
 
 ---
 
-## File Footer (fixed, 57 bytes)
+## File Footer (fixed, 65 bytes)
 
-Written only when the game ends cleanly (win or loss). If the tab is closed
-before game end, no footer is written and the buffer is discarded.
+Written whenever the game ends and we observe a face transition to win or
+loss, regardless of how much of the ResultBlock we can parse. If the tab is
+closed before game end, no footer is written and the buffer is discarded.
 
-All stat fields are **nullable**: a 2-byte `null_bitmap` immediately after
+All stat fields are **nullable**: a 4-byte `null_bitmap` immediately after
 `result` encodes which fields are present. Bit `n` (0 = LSB) corresponds to
 the stat at position `n` in the order below. Bit = `1` means the field is
 present and valid; bit = `0` means the field is absent and its bytes are
 all `0x00`. Readers must check the bitmap before interpreting any stat field.
 
-Stats may be absent on very short games, custom boards, or if the
-ResultBlock fails to parse. On loss, all stats are always absent
-(`null_bitmap = 0x0000`): the site does not show ResultBlock stats for
-losses and the recorder does not attempt to parse them.
+Stats may be absent for any reason — very short games, custom boards,
+ResultBlock structural changes, regex misses on a single field, etc.
+**Individual stat parse failures are non-fatal**: the recorder leaves that
+field's bit unset (0) and its bytes zero, then continues to the next field.
+The footer is always written if we reached game end, even if every stat bit
+is zero. This applies to both wins and losses — fixtures show that loss
+games also contain a (partial) ResultBlock, so we attempt to parse stats in
+both cases.
 
-| Offset | Size | Type    | Field         | Bit | Description                                     |
-|--------|------|---------|---------------|-----|-------------------------------------------------|
-| 0      | 1    | uint8   | `tag`         | —   | Always `0xFF` (footer sentinel).                |
-| 1      | 1    | uint8   | `result`      | —   | `0x01` = win, `0x02` = loss.                    |
-| 2      | 2    | uint16  | `null_bitmap` | —   | Presence flags for stats fields (see above).    |
-| 4      | 4    | uint32  | `duration_ms` | —   | Game timer, ms. Always present if footer exists.|
-| 8      | 4    | float32 | `time_s`      |  0  | Time in seconds (e.g. `10.459`).               |
-| 12     | 2    | uint16  | `bbbv`        |  1  | 3BV: minimum clicks to clear board optimally.  |
-| 14     | 4    | float32 | `bbbv_per_s`  |  2  | 3BV/s: 3BV ÷ time. Primary speed metric.       |
-| 18     | 2    | uint16  | `clicks_l`    |  3  | Left clicks (reveals + chords).                |
-| 20     | 2    | uint16  | `clicks_r`    |  4  | Right clicks (flags).                          |
-| 22     | 4    | float32 | `cps`         |  5  | Clicks per second: total clicks ÷ time.        |
-| 26     | 1    | uint8   | `efficiency`  |  6  | Efficiency %: (3BV ÷ left clicks) × 100.       |
-| 27     | 4    | float32 | `ioe`         |  7  | IOE: 3BV ÷ total clicks. Range 0–1.            |
-| 31     | 2    | uint16  | `ops`         |  8  | Operations: distinct opening cascades.         |
-| 33     | 4    | float32 | `thrp`        |  9  | Throughput: normalised speed metric.           |
-| 37     | 4    | float32 | `corr`        | 10  | Correctness: ratio of decisive reveals.        |
-| 41     | 2    | uint16  | `zini`        | 11  | ZiNi: count of non-trivial board cells.        |
-| 43     | 4    | float32 | `zne`         | 12  | ZiNi Efficiency: IOE adjusted for ZiNi.        |
-| 47     | 4    | float32 | `znt`         | 13  | ZiNi Normalised Throughput: 3BV/s ÷ ZiNi.     |
-| 51     | 4    | float32 | `rqp`         | 14  | RQP: time² ÷ 3BV. Legacy metric, lower=better.|
-| 55     | 4    | float32 | `ios`         | 15  | IOS: speed relative to think time.            |
+`null_bitmap` is uint32 to leave room for future stat additions without a
+breaking format change.
 
-**Total: 59 bytes** (including sentinel and bitmap).
+| Offset | Size | Type    | Field            | Bit | Description                                     |
+|--------|------|---------|------------------|-----|-------------------------------------------------|
+| 0      | 1    | uint8   | `tag`            | —   | Always `0xFF` (footer sentinel).                |
+| 1      | 1    | uint8   | `result`         | —   | `0x01` = win, `0x02` = loss.                    |
+| 2      | 4    | uint32  | `null_bitmap`    | —   | Presence flags for stat fields (see above).     |
+| 6      | 4    | uint32  | `duration_ms`    |  0  | Game timer, ms. Source: `time_s × 1000` when available, else absent. |
+| 10     | 4    | float32 | `time_s`         |  1  | Time in seconds (e.g. `10.459`).                |
+| 14     | 2    | uint16  | `bbbv`           |  2  | 3BV: minimum clicks to clear board optimally. On loss the DOM shows "X / Y" (completed / total) — store Y. |
+| 16     | 4    | float32 | `bbbv_per_s`     |  3  | 3BV/s: 3BV ÷ time. Primary speed metric.        |
+| 20     | 2    | uint16  | `clicks_l`       |  4  | Left clicks (reveals + chords).                 |
+| 22     | 2    | uint16  | `clicks_r`       |  5  | Right clicks (flags). Defaults to 0 if the right-clicks `<span>` is absent (game ended before any flag). |
+| 24     | 4    | float32 | `cps`            |  6  | Clicks per second: total clicks ÷ time.         |
+| 28     | 1    | uint8   | `efficiency`     |  7  | Efficiency %: (3BV ÷ left clicks) × 100. Range 0–255 (can exceed 100). |
+| 29     | 4    | float32 | `ioe`            |  8  | IOE: 3BV ÷ total clicks. Range 0–1.             |
+| 33     | 2    | uint16  | `ops`            |  9  | Operations: distinct opening cascades.          |
+| 35     | 4    | float32 | `thrp`           | 10  | Throughput: normalised speed metric.            |
+| 39     | 4    | float32 | `corr`           | 11  | Correctness: ratio of decisive reveals.         |
+| 43     | 2    | uint16  | `zini`           | 12  | ZiNi: count of non-trivial board cells.         |
+| 45     | 4    | float32 | `zne`            | 13  | ZiNi Efficiency: IOE adjusted for ZiNi.         |
+| 49     | 4    | float32 | `znt`            | 14  | ZiNi Normalised Throughput: 3BV/s ÷ ZiNi.       |
+| 53     | 4    | float32 | `rqp`            | 15  | RQP: time² ÷ 3BV. Legacy metric, lower = better.|
+| 57     | 4    | float32 | `ios`            | 16  | IOS: speed relative to think time.              |
+| 61     | 4    | float32 | `estimated_time` | 17  | Estimated time. Loss-only stat shown by the site. |
+
+**Total: 65 bytes** (including sentinel and bitmap).
 
 **Notes**
 
-- `duration_ms` is always written (not nullable). It is read from the game
-  timer DOM element (`#top_area_time_*`) at game end. If that element is
-  missing or unparseable, the recorder must emit `RECORDING_ERROR` and
-  discard the session — no partial footer is written.
-- `result` is always present. On loss, `null_bitmap = 0x0000` and all stat
-  bytes are `0x00`.
+- `duration_ms` is bit 0 of the bitmap (nullable like every other stat). If
+  the recorder cannot derive it (no parseable `time_s` in the ResultBlock),
+  the bit is unset and the bytes are zero. A reader that needs duration
+  should fall back to `time_s` (also nullable, same source).
+- `result` is always present. The site renders a (partial) ResultBlock on
+  both wins and losses, so we attempt parsing in both cases. On loss the
+  ZNE/ZNT/IOS fields are often rendered as `–` (en-dash) — those bits are
+  unset. Fields like `estimated_time` are typically loss-only.
+- Stats are stored exactly as reported by the site (no rounding, no
+  recomputation). Field descriptions are best-effort; exact formulas are
+  defined by minesweeper.online.
 - `0xFF` cannot appear as a record tag (record tags are `0x10`–`0x41` in
   v1.0.0), so it unambiguously marks end-of-file when a reader encounters
   it in sequential parsing.
 - **Reader: EOF without `0xFF`.** If a reader reaches EOF before
   encountering `0xFF`, the file is incomplete. Readers must treat such
   files as corrupt and refuse to parse them.
-- Stats are stored as reported by the site. We do not recompute them.
-  Field descriptions are best-effort; exact formulas are defined by
-  minesweeper.online.
 
 ---
 
@@ -233,16 +244,51 @@ mid-game, the buffer is silently discarded.
 
 ## Error Handling
 
-Any unexpected condition during recording — unknown DOM structure, failed
-assumption, type error — triggers the following sequence:
+The recorder distinguishes **hard errors** (recording cannot continue) from
+**soft errors** (recover and continue). The intent is to never crash the
+recorder over a fixable parse hiccup, while still aborting cleanly when the
+captured state would be meaningless.
 
-1. Emit `SESSION_EVENT RECORDING_ERROR` with the current timestamp.
+### Hard errors (abort + discard buffer)
+
+Trigger the following sequence:
+
+1. Emit `SESSION_EVENT RECORDING_ERROR` with the current timestamp (to the
+   in-memory buffer; for in-process debug hooks only — never persisted).
 2. Stop all DOM polling and cursor sampling.
 3. Discard the in-memory buffer.
 4. Return to `IDLE` state.
 5. Log a warning to the browser console. No user-visible alert.
 
-No partial file is ever written to disk.
+Hard error conditions:
+
+- `rows`, `cols`, or `mines` is `0` at recording start.
+- A `BOARD_CHANGE` would have to write state `0xFF` (unknown DOM class
+  combination on a cell that was previously valid). Indicates the site's
+  DOM contract has changed.
+- Per-event timestamp would overflow uint32 (game running ≥ 49.7 days).
+  Emit `SESSION_EVENT TIMESTAMP_OVERFLOW` then follow the hard-error path.
+
+No partial file is ever written to disk after a hard error.
+
+### Soft errors (log + continue)
+
+Soft errors do **not** discard the buffer. The recorder logs a warning to
+the console and proceeds. Examples:
+
+- The `ResultBlock` is absent or partially absent at game end → footer is
+  written with `null_bitmap = 0x00000000` and zero stat bytes.
+- A single stat field (e.g. `bbbv_per_s`) fails to parse from text →
+  that bit stays unset, that field's bytes stay zero, neighbouring stats
+  are still attempted.
+- `duration_ms` cannot be derived (no parseable `time_s`) → its bit
+  stays unset; footer is still written.
+- The mine-counter slot carries an unexpected class (e.g. `hd_top-area-num-`
+  during over-flagging) → recorder logs and treats the slot as `0`.
+
+The footer is **always** written if the game face transitions to win or
+loss while we are recording. A footer with all stats absent is preferred to
+discarding the session.
 
 ---
 
@@ -274,9 +320,9 @@ Bytes 706–709:  ...                        y (float32)
 
 Byte    N:      0xFF                       footer sentinel
 Byte  N+1:      0x01                       result = win
-Bytes N+2– N+3: 0xFF 0xFF                  null_bitmap = all present
-Bytes N+4– N+7: ...                        duration_ms (uint32)
-Bytes N+8–N+58: ...                        stat fields (time_s … ios)
+Bytes N+2– N+5: 0xFF 0xFF 0x03 0x00        null_bitmap = bits 0–17 set
+Bytes N+6– N+9: ...                        duration_ms (uint32, bit 0)
+Bytes N+10–N+64: ...                       stat fields (time_s … estimated_time)
 ```
 
 ---

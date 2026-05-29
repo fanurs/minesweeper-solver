@@ -138,23 +138,23 @@ timestamp `t`.
 
 ### Cell State Codes
 
-| Code | DOM class(es)               | Description                          |
-|------|-----------------------------|--------------------------------------|
-| 0x00 | `hd_opened hd_type0`        | Revealed, 0 adjacent mines (empty)   |
-| 0x01 | `hd_opened hd_type1`        | Revealed, 1 adjacent mine            |
-| 0x02 | `hd_opened hd_type2`        | Revealed, 2 adjacent mines           |
-| 0x03 | `hd_opened hd_type3`        | Revealed, 3 adjacent mines           |
-| 0x04 | `hd_opened hd_type4`        | Revealed, 4 adjacent mines           |
-| 0x05 | `hd_opened hd_type5`        | Revealed, 5 adjacent mines           |
-| 0x06 | `hd_opened hd_type6`        | Revealed, 6 adjacent mines           |
-| 0x07 | `hd_opened hd_type7`        | Revealed, 7 adjacent mines           |
-| 0x08 | `hd_opened hd_type8`        | Revealed, 8 adjacent mines           |
-| 0x09 | `hd_closed` (no flag)       | Closed, unflagged                    |
-| 0x0A | `hd_closed hd_flag`         | Flagged                              |
-| 0x0B | `hd_type10`                 | Mine revealed (game over, all mines) |
-| 0x0C | `hd_type10 hd_mine_clicked` | Mine that was directly clicked       |
-| 0x0D | `hd_type11`                 | Wrong flag (was not a mine)          |
-| 0xFF |                             | Unknown / parse fallback             |
+| Code | DOM class(es)                          | Description                          |
+|------|----------------------------------------|--------------------------------------|
+| 0x00 | `hd_opened hd_type0`                   | Revealed, 0 adjacent mines (empty)   |
+| 0x01 | `hd_opened hd_type1`                   | Revealed, 1 adjacent mine            |
+| 0x02 | `hd_opened hd_type2`                   | Revealed, 2 adjacent mines           |
+| 0x03 | `hd_opened hd_type3`                   | Revealed, 3 adjacent mines           |
+| 0x04 | `hd_opened hd_type4`                   | Revealed, 4 adjacent mines           |
+| 0x05 | `hd_opened hd_type5`                   | Revealed, 5 adjacent mines           |
+| 0x06 | `hd_opened hd_type6`                   | Revealed, 6 adjacent mines           |
+| 0x07 | `hd_opened hd_type7`                   | Revealed, 7 adjacent mines           |
+| 0x08 | `hd_opened hd_type8`                   | Revealed, 8 adjacent mines           |
+| 0x09 | `hd_closed` (no flag)                  | Closed, unflagged                    |
+| 0x0A | `hd_closed hd_flag`                    | Flagged                              |
+| 0x0B | `hd_opened hd_type10`                  | Mine revealed (game over, all mines) |
+| 0x0C | —                                      | Reserved (was: "mine that was directly clicked"). The site does not visually distinguish the triggering mine, so this state is never emitted. The mine the player clicked is still derivable at analysis time by correlating the last `LEFT_UP` `MOUSE_EVENT` position with `BOARD_CHANGE` records at the same timestamp. |
+| 0x0D | `hd_opened hd_type11`                  | Wrong flag (cell was flagged but contained no mine; revealed on loss) |
+| 0xFF |                                        | Unknown / parse fallback             |
 
 **Notes**
 
@@ -163,8 +163,18 @@ timestamp `t`.
 - States `0x0B`–`0x0D` appear only on game loss.
 - The initial board (all cells `0x09`) is implied by the header; no
   `BOARD_CHANGE` records are emitted for the starting state.
-- `0xFF` must never be written by the recorder. If an unknown DOM class is
-  encountered, emit `SESSION_EVENT RECORDING_ERROR` and abort.
+- `hd_pressed` is a **transient input-feedback class** added to a closed cell
+  while the left mouse button is held over it. At most one cell is pressed at
+  a time. Flagged cells cannot be pressed. Press-state is **not** encoded in
+  `BOARD_CHANGE`: it is fully reconstructible at analysis time from
+  `MOUSE_EVENT` + `CURSOR` records and cell geometry. The parser must
+  recognise `hd_pressed` so it can ignore it when computing the cell's
+  persistent state (treat `hd_closed hd_pressed` as `0x09`).
+- Cell elements carry additional skin classes (e.g. `size26`). The parser
+  must use `classList.contains()` / regex matching on the full class list,
+  not equality against a fixed string.
+- `0xFF` must never be written by the recorder. If an unknown DOM class
+  combination is encountered, emit `SESSION_EVENT RECORDING_ERROR` and abort.
 - **Reader behavior for state `0xFF`:** treat the containing `BOARD_CHANGE`
   record as corrupt, emit a warning, and refuse to parse the file.
 
@@ -187,8 +197,8 @@ interpolation boundaries.
 | Code | Name                 | Description                                                         |
 |------|----------------------|---------------------------------------------------------------------|
 | 0x01 | `GAME_START`         | Recording begins. Always the first record. `t = 0`.                |
-| 0x02 | `GAME_WIN`           | Win detected (face = cool). Footer written immediately after.       |
-| 0x03 | `GAME_LOSS`          | Loss detected (face = dead). Footer written immediately after.      |
+| 0x02 | `GAME_WIN`           | Win detected (face class `hd_top-area-face-win`). Footer written immediately after. |
+| 0x03 | `GAME_LOSS`          | Loss detected (face class `hd_top-area-face-lose`). Footer written immediately after. |
 | 0x04 | `TAB_BLUR`           | Tab lost focus. Cursor sampling stops. DOM polling drops to 10 Hz. |
 | 0x05 | `TAB_FOCUS`          | Tab regained focus. `CURSOR_ANCHOR` emitted immediately after.      |
 | 0x06 | `TIMESTAMP_OVERFLOW` | uint32 `t` would overflow. Recording stops, buffer discarded.       |
@@ -200,12 +210,16 @@ interpolation boundaries.
 - `CURSOR_ANCHOR` at `t = 0` is always the second record in the file.
 - `TAB_BLUR` / `TAB_FOCUS` delimit intervals where cursor tracking is
   suspended. Do not interpolate cursor positions across these pairs.
-- `TIMESTAMP_OVERFLOW` and `RECORDING_ERROR` mark abnormal termination.
+- `TIMESTAMP_OVERFLOW` and `RECORDING_ERROR` mark abnormal termination
+  (hard errors — see [format-session.md](format-session.md#error-handling)).
   A valid completed file never contains these — it always ends with
   `GAME_WIN` or `GAME_LOSS` followed immediately by the footer (`0xFF`).
   These records are emitted to the in-memory buffer immediately before the
   buffer is discarded; they exist to support in-process debug hooks, not
   for disk persistence.
+- Soft errors (e.g. an individual ResultBlock stat fails to parse) do **not**
+  emit `RECORDING_ERROR`. The recorder logs to the console and continues;
+  the missing stat's bit in the footer's `null_bitmap` stays unset.
 - **TAB_BLUR race with mandatory CURSOR_ANCHOR:** if a `TAB_BLUR` event
   fires after a `RESIZE_EVENT`, `SCROLL_EVENT`, `ZOOM_EVENT`, or `TAB_FOCUS`
   but before its mandatory `CURSOR_ANCHOR` can be written, the recorder must
@@ -260,7 +274,7 @@ distances by the cell pixel size at that point in the session.
 
 ## Record Ordering Guarantees
 
-1. `SESSION_EVENT GAME_START` is always the first record (offset 684 in file).
+1. `SESSION_EVENT GAME_START` is always the first record (offset 688 in file).
 2. `CURSOR_ANCHOR` at `t = 0` is always the second record.
 3. All subsequent records are in non-decreasing `t` order.
 4. Within the same timestamp, `BOARD_CHANGE` records appear after any
@@ -285,7 +299,7 @@ distances by the cell pixel size at that point in the session.
 | 0x30 | BOARD_CHANGE    | 10    |
 | 0x40 | SESSION_EVENT   | 9     |
 | 0x41 | RESIZE_EVENT    | 11    |
-| 0xFF | Footer sentinel | 59    |
+| 0xFF | Footer sentinel | 65    |
 
 ---
 

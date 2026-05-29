@@ -54,17 +54,28 @@ A fresh game is detected when **all four** conditions are simultaneously true:
 | Condition        | DOM indicator                                                          |
 |------------------|------------------------------------------------------------------------|
 | Face neutral     | `#top_area_face` has class `hd_top-area-face-unpressed`               |
-| Timer at zero    | `#top_area_time_100`, `#top_area_time_10`, `#top_area_time_1` all `0` |
+| Timer at zero    | `#top_area_time_100`, `#top_area_time_10`, `#top_area_time_1` all carry `hd_top-area-num0` |
 | All cells closed | Every cell has class `hd_closed`, none has `hd_opened`                |
 | No ResultBlock   | `#ResultBlock` absent or not visible                                   |
 
-When all four are true, recording begins immediately:
+**Digit parsing.** Each `#top_area_time_*` and `#top_area_mines_*` element
+carries a class of the form `hd_top-area-num{D}` where `D` is `0`–`9`
+(or `-` for the leading slot when over-flagging causes a negative mine
+counter, e.g. `hd_top-area-num-`). The parser must scan `classList` with a
+regex like `/^hd_top-area-num(\d|-)$/`, not assume class-list position.
+
+The negative-counter case is irrelevant at fresh-game detection (no flags
+exist yet, so the counter is positive). It matters only mid-game and is
+not stored in any record — the live counter is derivable from
+`total_mines - count(flagged cells)`.
+
+When all four conditions are true, recording begins immediately:
 
 1. Read `rows` and `cols` from max `data-y` and `data-x` attributes on cell
    elements (zero-indexed, so add 1). If either is 0, emit `RECORDING_ERROR`
-   and abort.
-2. Read `mines` from the mine counter digits
-   (`#top_area_mines_100/10/1` class suffix). If 0, abort with `RECORDING_ERROR`.
+   and abort (hard error).
+2. Read `mines` from the three `#top_area_mines_*` digit slots. If 0, abort
+   with `RECORDING_ERROR` (hard error).
 3. Measure `#AreaBlock` bounding rect; record pixel width (`init_px_w`) and
    height (`init_px_h`); compute cell pixel width and height.
 4. Read game URL from `window.location.href`.
@@ -169,23 +180,35 @@ detection from `IDLE`.
 Polled at the current poll rate (30 Hz in `RECORDING`, 10 Hz in
 `TAB_BLURRED`).
 
-| Face class                 | Result | Action                                   |
-|----------------------------|--------|------------------------------------------|
-| `hd_top-area-face-win`     | Win    | Parse ResultBlock stats, write footer.   |
-| `hd_top-area-face-lose`    | Loss   | Write footer with null_bitmap = 0x0000.  |
+| Face class                 | Result | Action                                  |
+|----------------------------|--------|-----------------------------------------|
+| `hd_top-area-face-win`     | Win    | Parse ResultBlock stats, write footer.  |
+| `hd_top-area-face-lose`    | Loss   | Parse ResultBlock stats, write footer.  |
+
+Both wins and losses get the same parsing path: the site renders a
+(possibly partial) ResultBlock in both cases, so we attempt to read every
+stat in both. On loss, the ZNE/ZNT/IOS fields are often shown as `–` and
+their bits will end up unset — that is normal, not an error.
 
 On detection:
 
 1. Emit `SESSION_EVENT GAME_WIN` or `GAME_LOSS`.
-2. Stop cursor sampling and DOM polling; transition to `FINISHING`.
-3. On win: parse `#ResultBlock` for all stat fields. For each field found,
-   set the corresponding bit in `null_bitmap`. Fields not found leave their
-   bit as `0` and their bytes as `0x00`.
-4. Write footer (59 bytes total including `0xFF` sentinel) to buffer.
-5. Trigger browser download: filename
+2. **Stop DOM polling synchronously** in the same task that emitted the
+   event. This prevents the post-game replay UI (which mounts a few frames
+   later on wins) from being interpreted as ongoing board changes.
+3. Stop cursor sampling. Transition to `FINISHING`.
+4. Parse `#ResultBlock` for stat fields. For each field found and parsed,
+   set the corresponding bit in `null_bitmap`. Fields not found, fields
+   shown as `–` (en-dash), and fields that fail to parse leave their bit
+   as `0` and their bytes as `0x00`. Individual parse failures are
+   non-fatal — keep going.
+5. Derive `duration_ms` from the `time_s` value (× 1000) if present; its
+   bit is unset otherwise.
+6. Write footer (65 bytes total including `0xFF` sentinel) to buffer.
+7. Trigger browser download: filename
    `{epoch_start_ms}_{difficulty}_{result}.msm` into
    `minesweeper-mirror/` in the user's Downloads folder.
-6. Free buffer; transition to `IDLE`.
+8. Free buffer; transition to `IDLE`.
 
 ---
 
@@ -207,16 +230,35 @@ while a mandatory `CURSOR_ANCHOR` sequence is in progress. Precedence rules:
 
 ## Error Handling
 
-Any unexpected condition — DOM structure mismatch, failed type assertion,
-missing required element, unknown cell state class — triggers:
+See [format-session.md](format-session.md#error-handling) for the full
+hard-error / soft-error split. Quick summary:
 
-1. Emit `SESSION_EVENT RECORDING_ERROR` to the in-memory buffer (this record
-   is for in-process debug hooks; it is never written to disk because the
-   buffer is discarded in the next step).
+**Hard errors abort recording and discard the buffer:**
+
+1. Emit `SESSION_EVENT RECORDING_ERROR` to the in-memory buffer (in-process
+   debug hook only — never written to disk since the buffer is discarded
+   immediately afterwards).
 2. Stop all polling intervals and cursor sampling.
 3. Discard the in-memory buffer. No file is written.
 4. `console.warn('[minesweeper-mirror] recording error — session discarded')`.
 5. Transition to `IDLE`.
+
+Hard error triggers:
+
+- `rows`, `cols`, or `mines` is 0 at game start (DOM structure mismatch).
+- An in-game cell carries a class combination that maps to state `0xFF`
+  (would-be unknown state — DOM contract has changed).
+- Per-event timestamp overflow (≥ 49.7 days; precede with
+  `SESSION_EVENT TIMESTAMP_OVERFLOW`).
+
+**Soft errors log and continue:**
+
+- ResultBlock missing or partial at game end → footer is written with
+  whichever bits we could fill.
+- Individual stat regex fails → that bit stays 0, neighbouring stats are
+  still attempted.
+- Mine-counter slot contains the `hd_top-area-num-` minus class while
+  recording — log and skip; the value isn't stored anyway.
 
 `RECORDING_ERROR` and `TIMESTAMP_OVERFLOW` records will never appear in a
 valid completed `.msm` file (they always cause the buffer to be discarded).
@@ -227,7 +269,7 @@ valid completed `.msm` file (they always cause the buffer to be discarded).
 
 | Phase                 | File state                                                |
 |-----------------------|-----------------------------------------------------------|
-| Fresh game detected   | Buffer allocated in memory; 684-byte header written.      |
+| Fresh game detected   | Buffer allocated in memory; 688-byte header written.      |
 | Recording             | Events appended to in-memory buffer.                      |
 | Game ends cleanly     | Footer appended; download triggered; buffer freed.        |
 | Tab closed mid-game   | Buffer discarded. Nothing written to disk.                |
