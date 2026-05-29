@@ -17,6 +17,7 @@ sessions/
 
 # Temp / scratch
 assets/frames/
+scratch/
 
 # Personal notes (not for the repo)
 TODO.md
