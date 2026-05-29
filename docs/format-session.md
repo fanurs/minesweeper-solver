@@ -275,8 +275,8 @@ Hard error conditions:
 - A `BOARD_CHANGE` would have to write state `0xFF` (unknown DOM class
   combination on a cell that was previously valid). Indicates the site's
   DOM contract has changed. Note: the end-of-game classes `hd_type10`
-  (→ `0x0B`) and `hd_type11` (→ `0x0D`) are **known**, not unknown — they
-  signal game over and must never trigger this abort.
+  (→ `0x0B`), `hd_type12` (→ `0x0C`), and `hd_type11` (→ `0x0D`) are **known**,
+  not unknown — they signal game over and must never trigger this abort.
 - Per-event timestamp would overflow uint32 (game running ≥ 49.7 days).
   Emit `SESSION_EVENT TIMESTAMP_OVERFLOW` then follow the hard-error path.
 

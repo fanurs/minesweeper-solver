@@ -14,7 +14,7 @@ export type CellState =
   | "open8" //       0x01–0x08  hd_opened hd_type1–8
   | "flag" //        0x0A  hd_closed hd_flag (incl. win-time auto-flags)
   | "mine" //        0x0B  hd_opened hd_type10 (unflagged mine, revealed on loss)
-  | "mine_hit" //    hd_opened hd_type12 (the detonated mine you clicked; → 0x0C, spec decision pending)
+  | "mine_hit" //    0x0C  hd_opened hd_type12 (the detonated mine you clicked)
   | "wrong_flag" //  0x0D  hd_opened hd_type11 (flagged a non-mine, shown on loss)
   | "unknown"; //    0xFF  unrecognized — must never occur on a valid board
 

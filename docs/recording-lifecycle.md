@@ -223,11 +223,14 @@ paths differ in one important way — whether the terminal board frame is captur
 
 1. **Do one forced, synchronous final poll** of the board (do not wait for the
    next scheduled tick — it may be throttled). The loss frame reveals every
-   unflagged mine as `hd_type10` and marks wrong flags as `hd_type11`, all in one
-   frame. Emit a `BOARD_CHANGE` for each changed cell — `0x0B` for revealed
-   mines, `0x0D` for wrong flags — all sharing the final timestamp `t`. Mines the
-   player had **correctly flagged** stay `0x0A` and need no record. `hd_type10` /
-   `hd_type11` are known classes and must **not** trip the `0xFF` hard-abort.
+   unflagged mine as `hd_type10`, marks the detonated (clicked) mine as
+   `hd_type12` when the site distinguishes it, and marks wrong flags as
+   `hd_type11`, all in one frame. Emit a `BOARD_CHANGE` for each changed cell —
+   `0x0B` for revealed mines, `0x0C` for the detonated mine, `0x0D` for wrong
+   flags — all sharing the final timestamp `t`. Mines the player had
+   **correctly flagged** stay `0x0A` and need no record. `hd_type10` /
+   `hd_type11` / `hd_type12` are known classes and must **not** trip the `0xFF`
+   hard-abort.
 2. Emit `SESSION_EVENT GAME_LOSS`, then **stop DOM polling synchronously** so no
    later frame (e.g. a post-game replay UI) is mis-read as a board change.
 
@@ -343,8 +346,8 @@ Hard error triggers:
 - `rows`, `cols`, or `mines` is 0 at game start (DOM structure mismatch).
 - An in-game cell carries a class combination that maps to state `0xFF`
   (would-be unknown state — DOM contract has changed). The end-of-game classes
-  `hd_type10` / `hd_type11` are **known** (→ `0x0B` / `0x0D`), not `0xFF`, and
-  must not trigger this.
+  `hd_type10` / `hd_type11` / `hd_type12` are **known** (→ `0x0B` / `0x0D` /
+  `0x0C`), not `0xFF`, and must not trigger this.
 - Per-event timestamp overflow (≥ 49.7 days; precede with
   `SESSION_EVENT TIMESTAMP_OVERFLOW`).
 

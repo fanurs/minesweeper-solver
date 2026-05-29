@@ -158,7 +158,7 @@ timestamp `t`.
 | 0x09 | `hd_closed` (no flag)                  | Closed, unflagged                    |
 | 0x0A | `hd_closed hd_flag`                    | Flagged                              |
 | 0x0B | `hd_opened hd_type10`                  | Mine revealed on loss (an unflagged mine). Emitted in the terminal loss-reveal batch. |
-| 0x0C | —                                      | Reserved (was: "mine that was directly clicked"). The site does not visually distinguish the triggering mine, so this state is never emitted. The mine the player clicked is still derivable at analysis time by correlating the last `LEFT_UP` `MOUSE_EVENT` position with `BOARD_CHANGE` records at the same timestamp. |
+| 0x0C | `hd_opened hd_type12`                  | Detonated mine — the one the player clicked (rendered distinctly, usually red). Emitted in the terminal loss-reveal batch **when present**; the site does not always mark it (absent in older captures, e.g. `beginner_loss`), in which case the clicked mine is an ordinary `0x0B`, derivable from the last `LEFT_UP` `MOUSE_EVENT` position. |
 | 0x0D | `hd_opened hd_type11`                  | Wrong flag (cell was flagged but contained no mine; revealed on loss) |
 | 0xFF |                                        | Unknown / parse fallback             |
 
@@ -170,8 +170,10 @@ timestamp `t`.
   `BOARD_CHANGE` batch sharing the final timestamp, immediately **before** the
   `GAME_LOSS` `SESSION_EVENT` (see
   [recording-lifecycle.md](recording-lifecycle.md#game-end-detection)). Mines the
-  player had **correctly flagged** stay `0x0A` and produce no new record; only
-  unflagged/detonated mines flip to `0x0B` and wrong flags to `0x0D`.
+  player had **correctly flagged** stay `0x0A` and produce no new record; the
+  mine the player clicked flips to `0x0C` (when the site marks it via
+  `hd_type12`; otherwise `0x0B`), other unflagged mines to `0x0B`, and wrong
+  flags to `0x0D`.
 - On a **win** the site auto-flags every remaining mine; the recorder stops
   polling synchronously before that frame, so those auto-flags are **not**
   recorded as `BOARD_CHANGE` `0x0A`. The win-time mine map is derivable (every
@@ -196,9 +198,9 @@ timestamp `t`.
   hard-abort (the state is still fully determined by the known tokens).
 - `0xFF` must never be written by the recorder. If a genuinely unknown DOM class
   combination is encountered, emit `SESSION_EVENT RECORDING_ERROR` and abort.
-  The end-of-game classes `hd_type10` (`0x0B`) and `hd_type11` (`0x0D`) are
-  **known** states, not unknown combinations — they must map to `0x0B`/`0x0D`
-  and never trigger this abort.
+  The end-of-game classes `hd_type10` (`0x0B`), `hd_type12` (`0x0C`), and
+  `hd_type11` (`0x0D`) are **known** states, not unknown combinations — they must
+  map to `0x0B`/`0x0C`/`0x0D` and never trigger this abort.
 - **Reader behavior for state `0xFF`:** treat the containing `BOARD_CHANGE`
   record as corrupt, emit a warning, and refuse to parse the file.
 
@@ -222,7 +224,7 @@ interpolation boundaries.
 |------|----------------------|---------------------------------------------------------------------|
 | 0x01 | `GAME_START`         | Recording begins. Always the first record. `t = 0`.                |
 | 0x02 | `GAME_WIN`           | Win detected (face class `hd_top-area-face-win`). Polling stops synchronously first, so remaining-mine auto-flags are not recorded. Footer written immediately after. |
-| 0x03 | `GAME_LOSS`          | Loss detected (face class `hd_top-area-face-lose`). The terminal loss-reveal `BOARD_CHANGE` batch (`0x0B`/`0x0D`) is emitted immediately before this record; footer written immediately after. |
+| 0x03 | `GAME_LOSS`          | Loss detected (face class `hd_top-area-face-lose`). The terminal loss-reveal `BOARD_CHANGE` batch (`0x0B`/`0x0C`/`0x0D`) is emitted immediately before this record; footer written immediately after. |
 | 0x04 | `TAB_BLUR`           | Tab lost focus. Cursor sampling stops. DOM polling drops to a best-effort low rate (Chrome throttles hidden tabs to ~1 Hz). |
 | 0x05 | `TAB_FOCUS`          | Tab regained focus. `CURSOR_ANCHOR` emitted immediately after.      |
 | 0x06 | `TIMESTAMP_OVERFLOW` | uint32 `t` would overflow. Recording stops, buffer discarded.       |
@@ -308,7 +310,7 @@ distances by the cell pixel size at that point in the session.
    the triggering record and its `CURSOR_ANCHOR`.
 6. `SESSION_EVENT GAME_WIN` or `GAME_LOSS` is always the last record before
    the footer sentinel (`0xFF`). On loss, the terminal loss-reveal
-   `BOARD_CHANGE` batch (`0x0B`/`0x0D`) shares the final timestamp and is
+   `BOARD_CHANGE` batch (`0x0B`/`0x0C`/`0x0D`) shares the final timestamp and is
    emitted immediately **before** `GAME_LOSS` (so `GAME_LOSS` remains the last
    pre-footer record).
 
