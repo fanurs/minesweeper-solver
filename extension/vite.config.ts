@@ -7,8 +7,9 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
+        // Observer is content-script-only for now; the service worker
+        // (background.ts) is wired in with the WXT migration + recorder.
         content: resolve(__dirname, "src/content.ts"),
-        background: resolve(__dirname, "src/background.ts"),
       },
       output: {
         entryFileNames: "[name].js",

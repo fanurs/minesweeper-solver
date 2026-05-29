@@ -9,9 +9,9 @@ extension never interacts with the server beyond your normal play; it just
 restyles the board, plays sounds on your clicks, and saves a clean log of how
 each game unfolded.
 
-> :construction: **Early development.** The project scaffold, the `.msm`
-> session-file format spec, and DOM test fixtures are in place; the board
-> parser, recorder, sounds, and restyling are not implemented yet.
+> :construction: **Early development.** The `.msm` format spec, DOM fixtures, and
+> the **board parser** are in place, and the content script logs what it detects
+> on the page. The session recorder, sound, and restyling are not implemented yet.
 
 ## What it does
 
@@ -28,8 +28,8 @@ each game unfolded.
 
 ## Tech stack
 
-- **Extension:** TypeScript, [Vite](https://vitejs.dev) (IIFE build),
-  [Vitest](https://vitest.dev) (jsdom), Manifest V3.
+- **Extension:** TypeScript, [Vite](https://vitejs.dev) (build; migrating to
+  [WXT](https://wxt.dev)), [Vitest](https://vitest.dev) (jsdom), Manifest V3.
 - **Session format:** custom little-endian binary `.msm` — see
   [docs/format-session.md](docs/format-session.md),
   [docs/format-events.md](docs/format-events.md), and
@@ -54,8 +54,9 @@ npm run build      # outputs to extension/dist/
 ```
 
 Then load it in Chrome via `chrome://extensions` → enable **Developer mode** →
-**Load unpacked** → select the `extension/` directory. (A polished install
-flow is planned.)
+**Load unpacked** → select the `extension/` directory. Open a game on
+minesweeper.online and the DevTools console will log what the parser detects.
+(A polished install flow is planned.)
 
 ## License
 

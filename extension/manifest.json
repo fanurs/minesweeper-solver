@@ -12,8 +12,5 @@
       "css": ["src/styles/board.css"],
       "run_at": "document_idle"
     }
-  ],
-  "background": {
-    "service_worker": "dist/background.js"
-  }
+  ]
 }
