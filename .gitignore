@@ -19,6 +19,9 @@ sessions/
 assets/frames/
 scratch/
 
+# Editor atomic-write leftovers (e.g. foo.ts.tmp.1234.abcd)
+*.tmp.*
+
 # Personal notes (not for the repo)
 TODO.md
 CLAUDE.md
