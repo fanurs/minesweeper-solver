@@ -14,28 +14,28 @@ is a sequential stream, not a searchable byte sequence. An unknown tag is
 treated as a parse error; see Error Handling below.
 
 ```
-[FILE_HEADER]          ← fixed 688 bytes
+[FILE_HEADER]          ← fixed 690 bytes
 [RECORD] [RECORD] ...  ← sequential, tagged records
 [FILE_FOOTER]          ← fixed 65 bytes, written only on clean game end
 ```
 
 ---
 
-## File Header (fixed, 688 bytes)
+## File Header (fixed, 690 bytes)
 
 | Offset | Size | Type   | Field         | Description                                              |
 |--------|------|--------|---------------|----------------------------------------------------------|
 | 0      | 32   | utf8   | `version`     | Format version string, null-padded. e.g. `"1.0.0"`.     |
-| 32     | 1    | uint8  | `rows`        | Board row count (1–255).                                 |
-| 33     | 1    | uint8  | `cols`        | Board column count (1–255).                              |
-| 34     | 2    | uint16 | `mines`       | Total mine count (0–65535).                              |
-| 36     | 8    | uint64 | `epoch_start` | Unix epoch of game start, milliseconds UTC.              |
-| 44     | 128  | utf8   | `url`         | Full game URL, null-padded. e.g. `"https://minesweeper.online/game/6103894316"`. |
-| 172    | 2    | uint16 | `init_px_w`   | Board element pixel width at game start.                 |
-| 174    | 2    | uint16 | `init_px_h`   | Board element pixel height at game start.                |
-| 176    | 512  | utf8   | `comment`     | Free-form UTF-8 comment, null-padded. Default all zeros. |
+| 32     | 2    | uint16 | `rows`        | Board row count (1–65535).                               |
+| 34     | 2    | uint16 | `cols`        | Board column count (1–65535).                            |
+| 36     | 2    | uint16 | `mines`       | Total mine count (0–65535).                              |
+| 38     | 8    | uint64 | `epoch_start` | Unix epoch of game start, milliseconds UTC.              |
+| 46     | 128  | utf8   | `url`         | Full game URL, null-padded. e.g. `"https://minesweeper.online/game/6103894316"`. |
+| 174    | 2    | uint16 | `init_px_w`   | Board element pixel width at game start.                 |
+| 176    | 2    | uint16 | `init_px_h`   | Board element pixel height at game start.                |
+| 178    | 512  | utf8   | `comment`     | Free-form UTF-8 comment, null-padded. Default all zeros. |
 
-**Total: 688 bytes.**
+**Total: 690 bytes.**
 
 **Notes**
 
@@ -54,6 +54,9 @@ treated as a parse error; see Error Handling below.
   initial coordinate space; `RESIZE_EVENT` records encode subsequent changes.
 - `comment` is 512 bytes. Intended for human notes, tool metadata, or
   session tags. Not parsed by the recorder; written as-is.
+- `rows` and `cols` are uint16 (1–65535). Standard difficulties are tiny
+  (expert is 30×16), but minesweeper.online custom boards can exceed 255 in
+  either dimension, which a uint8 field would silently wrap — hence uint16.
 - `rows`, `cols`, and `mines` must each be ≥ 1. A recorder encountering
   zero for any of these must emit `RECORDING_ERROR` and abort. A reader
   encountering zero must treat the file as corrupt and refuse to parse.
@@ -120,7 +123,7 @@ is used:
 
 - Most samples are `CURSOR` records (tag + x + y = 9 bytes, no timestamp).
 - Every 30th sample (~once per second) is a `CURSOR_ANCHOR` (tag + t + x + y
-  = 15 bytes, with full uint32 timestamp).
+  = 13 bytes, with full uint32 timestamp).
 - Timestamps for non-anchor samples are linearly interpolated between the
   surrounding anchors at read time.
 
@@ -192,7 +195,7 @@ breaking format change.
 | 49     | 4    | float32 | `znt`            | 14  | ZiNi Normalised Throughput: 3BV/s ÷ ZiNi.       |
 | 53     | 4    | float32 | `rqp`            | 15  | RQP: time² ÷ 3BV. Legacy metric, lower = better.|
 | 57     | 4    | float32 | `ios`            | 16  | IOS: speed relative to think time.              |
-| 61     | 4    | float32 | `estimated_time` | 17  | Estimated time. Loss-only stat shown by the site. |
+| 61     | 4    | float32 | `estimated_time` | 17  | Estimated time. Loss-only stat; not shown on all losses (absent on e.g. beginner losses) — nullable (bit 17). |
 
 **Total: 65 bytes** (including sentinel and bitmap).
 
@@ -233,12 +236,16 @@ Examples:
 `difficulty`: `beginner` | `intermediate` | `expert` | `custom`
 `result`: `win` | `loss`
 
-Files are held in memory during recording. On game end, the complete buffer
-is offered as a browser download into a `minesweeper-mirror/` subfolder in
-the user's default Downloads directory.
+On game end the completed buffer is persisted to the extension's IndexedDB
+session store (see
+[recording-lifecycle.md](recording-lifecycle.md#persistence--export)); it is
+**not** auto-downloaded. The user exports stored sessions on demand (an explicit
+Export action), at which point each is written as a download under a
+`minesweeper-mirror/` subfolder of the default Downloads directory using this
+name.
 
-In-progress sessions have no on-disk representation. If the tab is closed
-mid-game, the buffer is silently discarded.
+In-progress sessions live only in memory and are discarded if the tab closes
+mid-game; completed sessions already in IndexedDB survive tab/window close.
 
 ---
 
@@ -265,7 +272,9 @@ Hard error conditions:
 - `rows`, `cols`, or `mines` is `0` at recording start.
 - A `BOARD_CHANGE` would have to write state `0xFF` (unknown DOM class
   combination on a cell that was previously valid). Indicates the site's
-  DOM contract has changed.
+  DOM contract has changed. Note: the end-of-game classes `hd_type10`
+  (→ `0x0B`) and `hd_type11` (→ `0x0D`) are **known**, not unknown — they
+  signal game over and must never trigger this abort.
 - Per-event timestamp would overflow uint32 (game running ≥ 49.7 days).
   Emit `SESSION_EVENT TIMESTAMP_OVERFLOW` then follow the hard-error path.
 
@@ -296,31 +305,31 @@ discarding the session.
 
 ```
 Bytes   0– 31:  "1.0.0\0\0..."            version (32 bytes, null-padded)
-Byte   32:      0x09                       rows = 9
-Byte   33:      0x09                       cols = 9
-Bytes  34– 35:  0x0A 0x00                  mines = 10 (uint16 LE)
-Bytes  36– 43:  ...                        epoch_start (uint64 LE)
-Bytes  44–171:  "https://minesweeper..."   url (128 bytes, null-padded)
-Bytes 172–173:  ...                        init_px_w (uint16 LE, e.g. 0xF0 0x00 = 240)
-Bytes 174–175:  ...                        init_px_h (uint16 LE)
-Bytes 176–687:  "\0\0..."                  comment (512 bytes, default empty)
+Bytes  32– 33:  0x09 0x00                  rows = 9 (uint16 LE)
+Bytes  34– 35:  0x09 0x00                  cols = 9 (uint16 LE)
+Bytes  36– 37:  0x0A 0x00                  mines = 10 (uint16 LE)
+Bytes  38– 45:  ...                        epoch_start (uint64 LE)
+Bytes  46–173:  "https://minesweeper..."   url (128 bytes, null-padded)
+Bytes 174–175:  ...                        init_px_w (uint16 LE, e.g. 0xF0 0x00 = 240)
+Bytes 176–177:  ...                        init_px_h (uint16 LE)
+Bytes 178–689:  "\0\0..."                  comment (512 bytes, default empty)
 
-Byte  688:      0x40                       SESSION_EVENT
-Bytes 689–692:  0x00 0x00 0x00 0x00        t = 0
-Byte  693:      0x01                       type = GAME_START
-Bytes 694–696:  0x00 0x00 0x00             _pad
+Byte  690:      0x40                       SESSION_EVENT
+Bytes 691–694:  0x00 0x00 0x00 0x00        t = 0
+Byte  695:      0x01                       type = GAME_START
+Bytes 696–698:  0x00 0x00 0x00             _pad
 
-Byte  697:      0x11                       CURSOR_ANCHOR (t=0, initial position)
-Bytes 698–701:  0x00 0x00 0x00 0x00        t = 0
-Bytes 702–705:  ...                        x (float32)
-Bytes 706–709:  ...                        y (float32)
+Byte  699:      0x11                       CURSOR_ANCHOR (t=0, initial position)
+Bytes 700–703:  0x00 0x00 0x00 0x00        t = 0
+Bytes 704–707:  ...                        x (float32)
+Bytes 708–711:  ...                        y (float32)
 
 ... [interleaved CURSOR, MOUSE_EVENT, BOARD_CHANGE, SESSION_EVENT,
      SCROLL_EVENT, ZOOM_EVENT, RESIZE_EVENT records] ...
 
 Byte    N:      0xFF                       footer sentinel
 Byte  N+1:      0x01                       result = win
-Bytes N+2– N+5: 0xFF 0xFF 0x03 0x00        null_bitmap = bits 0–17 set
+Bytes N+2– N+5: 0xFF 0xFF 0x01 0x00        null_bitmap = bits 0–16 set (win: estimated_time absent)
 Bytes N+6– N+9: ...                        duration_ms (uint32, bit 0)
 Bytes N+10–N+64: ...                       stat fields (time_s … estimated_time)
 ```
