@@ -14,8 +14,10 @@ import {
   parseTimerSeconds,
 } from "../src/board-parser";
 
-// Vitest runs with cwd = the extension/ package dir; fixtures are a sibling dir.
-const FIXTURES_DIR = resolve(process.cwd(), "..", "fixtures");
+// Vitest runs with cwd = the extension/ package dir; single-frame fixtures live
+// in the sibling fixtures/snapshots/ dir (fixtures/recordings/ holds multi-frame
+// session captures, not used by these unit tests).
+const FIXTURES_DIR = resolve(process.cwd(), "..", "fixtures", "snapshots");
 
 /** Load a fixture HTML file and parse it into a Document. */
 function loadDoc(name: string): Document {

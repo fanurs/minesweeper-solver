@@ -158,7 +158,7 @@ timestamp `t`.
 | 0x09 | `hd_closed` (no flag)                  | Closed, unflagged                    |
 | 0x0A | `hd_closed hd_flag`                    | Flagged                              |
 | 0x0B | `hd_opened hd_type10`                  | Mine revealed on loss (an unflagged mine). Emitted in the terminal loss-reveal batch. |
-| 0x0C | `hd_opened hd_type12`                  | Detonated mine — the one the player clicked (rendered distinctly, usually red). Emitted in the terminal loss-reveal batch **when present**; the site does not always mark it (absent in older captures, e.g. `beginner_loss`), in which case the clicked mine is an ordinary `0x0B`, derivable from the last `LEFT_UP` `MOUSE_EVENT` position. |
+| 0x0C | `hd_opened hd_type12`                  | Detonated mine(s) — a mine the player clicked or **chorded into**, rendered distinctly (red). A chord that opens several mines at once produces **multiple** `0x0C` cells (observed ×3; see [dom-behavior.md](dom-behavior.md)), so a loss may emit `0x0C` more than once. The class persists for the whole loss screen, so the forced loss-instant poll captures it; if a (late) capture lacks it, the clicked mine is an ordinary `0x0B`, derivable from the last `LEFT_UP` `MOUSE_EVENT` position. |
 | 0x0D | `hd_opened hd_type11`                  | Wrong flag (cell was flagged but contained no mine; revealed on loss) |
 | 0xFF |                                        | Unknown / parse fallback             |
 
@@ -170,10 +170,9 @@ timestamp `t`.
   `BOARD_CHANGE` batch sharing the final timestamp, immediately **before** the
   `GAME_LOSS` `SESSION_EVENT` (see
   [recording-lifecycle.md](recording-lifecycle.md#game-end-detection)). Mines the
-  player had **correctly flagged** stay `0x0A` and produce no new record; the
-  mine the player clicked flips to `0x0C` (when the site marks it via
-  `hd_type12`; otherwise `0x0B`), other unflagged mines to `0x0B`, and wrong
-  flags to `0x0D`.
+  player had **correctly flagged** stay `0x0A` and produce no new record; each mine
+  the player clicked or chorded into flips to `0x0C` (a chord into N mines yields
+  N `0x0C` cells), other unflagged mines to `0x0B`, and wrong flags to `0x0D`.
 - On a **win** the site auto-flags every remaining mine; the recorder stops
   polling synchronously before that frame, so those auto-flags are **not**
   recorded as `BOARD_CHANGE` `0x0A`. The win-time mine map is derivable (every

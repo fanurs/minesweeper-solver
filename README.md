@@ -41,8 +41,10 @@ each game unfolded.
 extension/        Chrome extension (TypeScript → dist/)
   src/            content script, service worker, styles, shared types
   tests/          Vitest tests against fixture HTML
-fixtures/         DOM snapshots from minesweeper.online for parser tests
-docs/             .msm format, recording lifecycle, and sound-effects specs
+fixtures/         DOM captures from minesweeper.online
+  snapshots/      single-frame states for parser unit tests
+  recordings/     multi-frame live session captures (behavioral reference)
+docs/             .msm format, recording lifecycle, DOM behavior, sound specs
 ```
 
 ## Building (dev)

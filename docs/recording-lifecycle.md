@@ -223,14 +223,18 @@ paths differ in one important way — whether the terminal board frame is captur
 
 1. **Do one forced, synchronous final poll** of the board (do not wait for the
    next scheduled tick — it may be throttled). The loss frame reveals every
-   unflagged mine as `hd_type10`, marks the detonated (clicked) mine as
-   `hd_type12` when the site distinguishes it, and marks wrong flags as
-   `hd_type11`, all in one frame. Emit a `BOARD_CHANGE` for each changed cell —
-   `0x0B` for revealed mines, `0x0C` for the detonated mine, `0x0D` for wrong
-   flags — all sharing the final timestamp `t`. Mines the player had
-   **correctly flagged** stay `0x0A` and need no record. `hd_type10` /
-   `hd_type11` / `hd_type12` are known classes and must **not** trip the `0xFF`
-   hard-abort.
+   unflagged mine as `hd_type10`, marks the **detonated mine(s)** as `hd_type12`,
+   and marks wrong flags as `hd_type11`, all in one frame (the reveal is atomic —
+   verified empirically, see [dom-behavior.md](dom-behavior.md)). Emit a
+   `BOARD_CHANGE` for each changed cell — `0x0B` for revealed mines, `0x0C` for
+   **each** detonated mine, `0x0D` for wrong flags — all sharing the final
+   timestamp `t`. A single click detonates one mine, but a **chord** that opens
+   several mines at once detonates **all of them**, so `0x0C` may be emitted
+   **more than once** in a single loss (observed ×3). `hd_type12` persists for the
+   whole loss screen, so the forced poll at the loss instant reliably captures it;
+   only a slow/late capture misses it. Mines the player had **correctly flagged**
+   stay `0x0A` and need no record. `hd_type10` / `hd_type11` / `hd_type12` are
+   known classes and must **not** trip the `0xFF` hard-abort.
 2. Emit `SESSION_EVENT GAME_LOSS`, then **stop DOM polling synchronously** so no
    later frame (e.g. a post-game replay UI) is mis-read as a board change.
 

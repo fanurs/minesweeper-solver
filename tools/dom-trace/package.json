@@ -1,0 +1,16 @@
+{
+  "name": "msm-dom-trace",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Dev-only tool (not shipped): records minesweeper.online DOM evolution (full-page HTML, change-triggered) by launching a throwaway private Edge; recordings are packed into a queryable SQLite fixture.",
+  "scripts": {
+    "record": "tsx record.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "playwright-core": "^1.49.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
